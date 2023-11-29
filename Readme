@@ -1,0 +1,278 @@
+#Coding Assignment: Implementation and Optimization of GPT-2 Model
+#Task1: GPT-2 Model & Checkpoints
+
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch.autograd import Variable
+class GPT2TokEmb(nn.Module):
+    def __init__(self, vocab_size, embedding_dim):
+        super(GPT2TokEmb, self).__init__()
+      self.embedding = nn.Embedding(vocab_size, embedding_dim)
+def forward(self, input_ids):
+        embedded = self.embedding(input_ids)
+        return embedded
+
+class GPT2PosEmb(nn.Module):
+    def __init__(self, max_len, embedding_dim):
+        super(GPT2PosEmb, self).__init__()
+        self.pos_emb = nn.Embedding(max_len, embedding_dim)
+
+    def forward(self, seq_len):
+        pos_ids = torch.arange(seq_len).unsqueeze(0)
+        pos_embedded = self.pos_emb(pos_ids)
+        return pos_embedded
+
+class GPT2TransformerBlock(nn.Module):
+    def __init__(self, embedding_dim, num_heads, d_ff):
+        super(GPT2TransformerBlock, self).__init__()
+
+        self.attn = nn.MultiheadAttention(embedding_dim, num_heads)
+        self.ln1 = nn.LayerNorm(embedding_dim)
+        self.ffn = nn.Sequential(
+            nn.Linear(embedding_dim, d_ff),
+            nn.ReLU(),
+            nn.Linear(d_ff, embedding_dim)
+        )
+        self.ln2 = nn.LayerNorm(embedding_dim)
+
+    def forward(self, x):
+        attn_output, _ = self.attn(x, x, x)
+        output = self.ln1(x + attn_output)
+        ffn_output = self.ffn(output)
+        output = self.ln2(output + ffn_output)
+        return output
+
+class GPT2LMHead(nn.Module):
+    def __init__(self, embedding_dim, vocab_size):
+        super(GPT2LMHead, self).__init__()
+        self.ln = nn.LayerNorm(embedding_dim)
+        self.linear = nn.Linear(embedding_dim, vocab_size)
+
+    def forward(self, x):
+        x = self.ln(x)
+        logits = self.linear(x)
+        return logits
+
+class GPT2Model(nn.Module):
+    def __init__(self, vocab_size, embedding_dim, num_layers, num_heads, d_ff):
+        super(GPT2Model, self).__init__()
+
+        self.tok_emb = GPT2TokEmb(vocab_size, embedding_dim)
+        self.pos_emb = GPT2PosEmb(embedding_dim)
+        self.transformer_blocks = nn.ModuleList([
+            GPT2TransformerBlock(embedding_dim, num_heads, d_ff) for _ in range(num_layers)
+        ])
+        self.lm_head = GPT2LMHead(embedding_dim, vocab_size)
+
+    def forward(self, input_ids, seq_len):
+        tok_embedded = self.tok_emb(input_ids)
+        pos_embedded = self.pos_emb(seq_len)
+        embedded = tok_embedded + pos_embedded
+
+        for block in self.transformer_blocks:
+            embedded = block(embedded)
+
+        logits = self.lm_head(embedded)
+        return logits
+
+# Load the original GPT-2 125M model checkpoints
+model = torch.load('gpt2_125m.ckpt')
+
+# Run a sample prediction
+input_ids = torch.randint(0, 10000, (1, 32))
+seq_len = torch.tensor([32])
+logits = model(input_ids, seq_len)
+
+predicted_ids = logits.argmax(dim=-1)
+print('Predicted IDs:', predicted_ids)
+This code implements the GPT-2 model with 125 million parameters using Python and PyTorch. It includes the key aspects of the model like multi-head self-attention mechanism, feed-forward networks, and positional encoding. The code also loads the original GPT-2 125M model checkpoints and runs a sample prediction to verify its functioning.
+
+
+
+Task 2 | Transformer Architectural Changes
+
+
+Rotary Positional Embedding
+
+import torch
+import torch.nn as nn									
+class RotaryPosEmb(nn.Module):
+    def __init__(self, freq, dim):
+        super(RotaryPosEmb, self).__init__()
+        self.freq = freq
+        self.dim = dim
+
+    def forward(self, x):
+        rotary_emb = torch.empty(x.size(-2), x.size(-1), 2 * self.dim)
+        for dim in range(0, self.dim, 2):
+            rotary_emb[:, :, dim] = torch.sin(x[:, :, dim / 2] * self.freq)
+            rotary_emb[:, :, dim + 1] = torch.cos(x[:, :, dim / 2] * self.freq)
+        return rotary_emb.unsqueeze(0)
+
+Group Query Attention
+
+import torch
+import torch.nn as nn
+class GroupQueryAttention(nn.Module):
+    def __init__(self, dim, num_heads, num_groups):
+        super(GroupQueryAttention, self).__init__()
+        self.dim = dim
+        self.num_heads = num_heads
+        self.num_groups = num_groups
+       self.in_proj = nn.Linear(dim, dim * num_heads * 3)
+        self.out_proj = nn.Linear(dim * num_heads, dim)
+
+    def forward(self, q, kv):
+        q, k, v = self.in_proj(q).chunk(3, dim=-1)
+        q = q.view(-1, self.num_groups, self.num_heads, q.size(-2), q.size(-1))
+        k = k.view(-1, self.num_groups, self.num_heads, v.size(-2), v.size(-1))
+        v = v.view(-1, self.num_groups, self.num_heads, v.size(-2), v.size(-1))
+
+        attn_weights = torch.matmul(q, k.transpose(-2, -1))
+        attn_weights = F.softmax(attn_weights, dim=-1)
+
+        output = torch.matmul(attn_weights, v)
+        output = output.view(-1, self.num_heads * v.size(-2), v.size(-1))
+        output = self.out_proj(output)
+
+        return output
+
+
+Sliding Window Attention
+
+import torch
+import torch.nn as nn
+
+class SlidingWindowAttention(nn.Module):
+    def __init__(self, dim, num_heads, window_size):
+        super(SlidingWindowAttention, self).__init__()
+        self.dim = dim
+        self.num_heads = num_heads
+        self.window_size = window_size
+
+        self.in_proj = nn.Linear(dim, dim * num_heads * 3)
+        self.out_proj = nn.Linear(dim * num_heads, dim)
+
+    def forward(self, q, kv):
+        q, k, v = self.in_proj(q).chunk(3, dim=-1)
+        q = q.view(-1, q.size(-2) // self.window_size, self.window_size, q.size(-1))
+        k = k.view(-1, k.size(-2) // self.window_size, self.window_size, k.size(-1))
+        v = v.view(-1, v.size(-2) // self.window_size, self.window_size, v.size(-1))
+
+        attn_weights = torch.matmul(q, k.transpose(-2, -1))
+        attn_weights = F.softmax(attn_weights, dim=-1)
+
+        output = torch.matmul(attn_weights, v)
+        output = output.contiguous().view(-1, q.size(-2), q.size(-1))
+        output = self.out_proj(output)
+        return output
+
+Rotary Positional Embedding
+Capabilities:
+•	Improved Efficiency: Rotary positional embeddings are more efficient than sinusoidal positional embeddings, especially for long sequences. This is because they do not require learning additional parameters for each position in the sequence.
+•	Potential Performance Improvements: Rotary positional embeddings can potentially improve model performance for long sequences, as they can better capture positional information without relying on learnable parameters.
+Pitfalls:
+•	Increased Complexity: Rotary positional embeddings introduce additional complexity to the model architecture. This could make the model more difficult to train and optimize.
+•	Potential Performance Degradation: Rotary positional embeddings may not always lead to performance improvements. In some cases, they could even lead to performance degradation, depending on the specific task and dataset.
+Group Query Attention
+Capabilities:
+•	Improved Attention Efficiency: Group query attention can improve the efficiency of the attention mechanism by grouping together queries and keys that are likely to attend to each other. This can reduce the number of computations required and improve model performance.
+•	Handling Long-Range Dependencies: Group query attention can help the model to better handle long-range dependencies in the input sequence. This is because it allows the model to attend to more distant positions in the sequence.
+Pitfalls:
+•	Increased Complexity: Group query attention introduces additional complexity to the model architecture. This could make the model more difficult to train and optimize.
+•	Potential Overfitting: Group query attention may be more prone to overfitting than standard attention. This is because it allows the model to learn more complex relationships between queries and keys.
+Sliding Window Attention
+Capabilities:
+•	Improved Efficiency: Sliding window attention can improve the efficiency of the attention mechanism by restricting attention to a local window around each query. This can reduce the number of computations required and improve model performance.
+•	Handling Long Sequences: Sliding window attention can help the model to handle long sequences by breaking them down into smaller chunks. This allows the model to focus on the most relevant parts of the sequence at each step.
+Pitfalls:
+•	Loss of Long-Range Information: Sliding window attention can cause the model to lose information about long-range dependencies in the sequence. This is because it only allows the model to attend to positions within a local window.
+•	Potential Performance Degradation: Sliding window attention may not always lead to performance improvements. In some cases, it could even lead to performance degradation, depending on the specific task and dataset.
+
+
+
+
+
+
+Task 3: Training Loop Implementation:
+
+
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import DataLoader
+def train_single_gpu(model, train_loader, optimizer, device):
+     model.train()
+     for epoch in range(num_epochs):
+        running_loss = 0.0
+        for i, batch in enumerate(train_loader):
+            input_ids = batch['input_ids'].to(device)
+            attention_mask = batch['attention_mask'].to(device)
+            labels = batch['labels'].to(device)
+            optimizer.zero_grad()
+            outputs = model(input_ids, attention_mask)
+            loss = outputs.loss
+            loss.backward()
+            optimizer.step()
+            running_loss += loss.item()
+            if i % log_interval == 0:
+                print ('Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
+                    epoch, i * len(input_ids), len(train_loader.dataset),
+                    100. * i / len(train_loader), running_loss / log_interval
+                ))
+                running_loss = 0.0
+def train_ddp(model, train_loader, optimizer, device):
+    model.train()
+    model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[device])
+    for epoch in range(num_epochs):
+        world_size = get_world_size()
+        running_loss = 0.0
+        for i, batch in enumerate(train_loader):
+            input_ids = batch['input_ids'].to(device)
+            attention_mask = batch['attention_mask'].to(device
+           labels = batch['labels'].to(device)
+            optimizer.zero_grad()
+            outputs = model(input_ids, attention_mask)
+            loss = outputs.loss
+            loss.backward()
+# Reduce gradients across processes
+            if world_size > 1:
+                dist.reduce_loss(loss)
+# Divide loss by world size to average it
+            if world_size > 1:
+                loss.div_(world_size)
+           optimizer.step()
+           running_loss += loss.item()
+            if i % log_interval == 0:
+                print ('Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
+                    epoch, i * len(input_ids), len(train_loader.dataset),
+                    100. * i / len(train_loader), running_loss / log_interval
+                ))
+                running_loss = 0.0
+def train_fsdp(model, train_loader, optimizer, device):
+    model.train()
+    model = FullyShardedDataParallel(model, optimizer.state_dict(), device)
+   for epoch in range(num_epochs):
+        running_loss = 0.0
+  for i, batch in enumerate(train_loader):
+            input_ids = batch['input_ids'].to(device)
+            attention_mask = batch['attention_mask'].to(device)
+            labels = batch['labels'].to(device)
+            optimizer.zero_grad()
+            outputs = model(input_ids, attention_mask)
+            loss = outputs.loss
+            loss.backward()
+ # Reduce gradients across shards
+            model.reduce_gradients()
+            optimizer.step()
+            running_loss += loss.item()
+            if i % log_interval == 0:
+                print('Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
+                    epoch, i * len(input_ids), len(train_loader.dataset),
+                    100. * i / len(train_loader), running_loss / log_interval
+                ))
+                running_loss = 0.0
+
+This script provides three training functions: train_single_gpu, train_ddp, and train_fsdp. The train_single_gpu function is for training the model on a single GPU. The train_ddp function is for training the model using Distributed Data Parallel (DDP) across multiple GPUs. The train_fsdp function is for training the model using Fully Sharded Data Parallel
